@@ -3,57 +3,83 @@ import requests
 
 app = Flask(__name__)
 
-def search_google_books(title, author=""):
+def search_gutenberg(title, author=""):
     query = f"{title} {author}".strip().replace(" ", "+")
-    url = f"https://www.googleapis.com/books/v1/volumes?q={query}"
-    response = requests.get(url)
-    data = response.json()
-    if "items" in data:
-        for item in data["items"]:
-            info = item.get("volumeInfo", {})
-            if title.lower() in info.get("title", "").lower():
+    url = f"https://gutendex.com/books?search={query}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        for book in data.get("results", []):
+            epub_link = book.get("formats", {}).get("application/epub+zip")
+            if epub_link:
                 return {
-                    "source": "Google Books",
-                    "title": info.get("title"),
-                    "link": info.get("infoLink")
+                    "title": book.get("title"),
+                    "source": "Project Gutenberg",
+                    "link": epub_link
                 }
-    return None
+    except:
+        return None
+
+def search_google_books(title, author=""):
+    q = f"{title} {author}".strip().replace(" ", "+")
+    url = f"https://www.googleapis.com/books/v1/volumes?q={q}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get("items", [])
+        results = []
+        for item in items:
+            volume_info = item.get("volumeInfo", {})
+            link = volume_info.get("infoLink")
+            if link:
+                results.append({
+                    "title": volume_info.get("title", "Unknown"),
+                    "source": "Google Books",
+                    "link": link
+                })
+        return results
+    except:
+        return []
 
 def search_internet_archive(title, author=""):
-    query = f"{title} {author}".strip().replace(" ", "+")
-    url = f"https://archive.org/advancedsearch.php?q=title:({query})&fl[]=identifier,title&output=json"
-    response = requests.get(url)
-    data = response.json()
-    if data["response"]["docs"]:
-        doc = data["response"]["docs"][0]
-        return {
-            "source": "Internet Archive",
-            "title": doc.get("title"),
-            "link": f"https://archive.org/details/{doc['identifier']}"
-        }
-    return None
+    q = f"{title} {author}".strip().replace(" ", "+")
+    url = f"https://archive.org/advancedsearch.php?q={q}&output=json"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        docs = data.get("response", {}).get("docs", [])
+        results = []
+        for doc in docs[:3]:  # limit to first few
+            identifier = doc.get("identifier")
+            if identifier:
+                results.append({
+                    "title": doc.get("title", "Unknown"),
+                    "source": "Internet Archive",
+                    "link": f"https://archive.org/details/{identifier}"
+                })
+        return results
+    except:
+        return []
 
 @app.route("/")
 def home():
     return "Book Availability Checker is running. Use /check_availability?title=...&author=..."
 
-@app.route("/check_availability", methods=["GET"])
+@app.route("/check_availability")
 def check_availability():
-    title = request.args.get("title")
+    title = request.args.get("title", "")
     author = request.args.get("author", "")
 
     results = []
 
-    gb_result = search_google_books(title, author)
-    if gb_result:
-        results.append(gb_result)
+    gutenberg_result = search_gutenberg(title, author)
+    if gutenberg_result:
+        results.append(gutenberg_result)
 
-    ia_result = search_internet_archive(title, author)
-    if ia_result:
-        results.append(ia_result)
+    results.extend(search_google_books(title, author))
+    results.extend(search_internet_archive(title, author))
 
-    return jsonify(results if results else {"message": "No results found."})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 3000))
-    app.run(host="0.0.0.0", port=port)
+    return jsonify(results)
