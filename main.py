@@ -16,7 +16,8 @@ def search_gutenberg(title, author=""):
                 return {
                     "title": book.get("title"),
                     "source": "Project Gutenberg",
-                    "link": epub_link
+                    "link": epub_link,
+                    "format": "ePub"
                 }
     except:
         return None
@@ -32,13 +33,14 @@ def search_google_books(title, author=""):
         results = []
         for item in items:
             volume_info = item.get("volumeInfo", {})
-            link = volume_info.get("infoLink")
-            if link:
-                results.append({
-                    "title": volume_info.get("title", "Unknown"),
-                    "source": "Google Books",
-                    "link": link
-                })
+            results.append({
+                "title": volume_info.get("title", "Unknown"),
+                "source": "Google Books",
+                "link": volume_info.get("infoLink"),
+                "summary": volume_info.get("description", ""),
+                "subject": ", ".join(volume_info.get("categories", [])),
+                "format": "Website"
+            })
         return results
     except:
         return []
@@ -52,21 +54,48 @@ def search_internet_archive(title, author=""):
         data = response.json()
         docs = data.get("response", {}).get("docs", [])
         results = []
-        for doc in docs[:3]:  # limit to first few
+        for doc in docs[:3]:
             identifier = doc.get("identifier")
             if identifier:
                 results.append({
                     "title": doc.get("title", "Unknown"),
                     "source": "Internet Archive",
-                    "link": f"https://archive.org/details/{identifier}"
+                    "link": f"https://archive.org/details/{identifier}",
+                    "format": "Website"
                 })
         return results
     except:
         return []
 
+def search_open_library(title, author=""):
+    q = f"{title} {author}".strip().replace(" ", "+")
+    url = f"https://openlibrary.org/search.json?title={q}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        docs = data.get("docs", [])
+        if docs:
+            doc = docs[0]
+            olid = doc.get("key", "")  # e.g., "/works/OL123W"
+            work_url = f"https://openlibrary.org{olid}.json"
+            work_resp = requests.get(work_url)
+            if work_resp.ok:
+                work_data = work_resp.json()
+                return {
+                    "title": doc.get("title"),
+                    "source": "Open Library",
+                    "link": f"https://openlibrary.org{olid}",
+                    "subject": ", ".join(work_data.get("subjects", [])[:5]),
+                    "summary": work_data.get("description", {}).get("value") if isinstance(work_data.get("description"), dict) else work_data.get("description", ""),
+                    "format": "Website"
+                }
+    except:
+        return None
+
 @app.route("/")
 def home():
-    return "Book Availability Checker is running. Use /check_availability?title=...&author=..."
+    return "Book Availability & Metadata Checker is running. Use /check_availability?title=...&author=..."
 
 @app.route("/check_availability")
 def check_availability():
@@ -75,11 +104,16 @@ def check_availability():
 
     results = []
 
+    # Add each source
     gutenberg_result = search_gutenberg(title, author)
     if gutenberg_result:
         results.append(gutenberg_result)
 
     results.extend(search_google_books(title, author))
     results.extend(search_internet_archive(title, author))
+
+    openlib_result = search_open_library(title, author)
+    if openlib_result:
+        results.append(openlib_result)
 
     return jsonify(results)
